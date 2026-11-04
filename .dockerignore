@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.env*
+.git/
+.venv/
+venv/
+tests/
+src/**/__pycache__/
+src/.github/
+src/discover.py
+src/inspect_targets.py

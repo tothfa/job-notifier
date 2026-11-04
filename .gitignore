@@ -1,0 +1,41 @@
+# Local configuration and secrets
+.env*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local tooling and internal workspace files
+.vscode/
+.idea/
+/src/.github/
+/src/discover.py
+/src/inspect_targets.py
+
+# Logs, local databases, backups, and generated artifacts
+*.log
+*.sqlite
+*.sqlite3
+*.dump
+*.backup
+*.sql.gz
+/pgdata/
+/build/
+/dist/
+*.egg-info/
+
+# Private keys and local certificates
+*.pem
+*.key
+*.p12
+*.pfx
