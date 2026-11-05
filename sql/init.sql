@@ -49,7 +49,11 @@ CREATE TABLE saved_filters (
     
     keywords_include TEXT[],        -- pl. ARRAY['python', 'java', 'tesztelő', 'dokumentáció']
     keywords_exclude TEXT[],        -- pl. ARRAY['éjszakai', 'nehéz fizikai']
-    
+    delivery_mode VARCHAR(20) NOT NULL DEFAULT 'instant'
+        CHECK (delivery_mode IN ('instant', 'daily')),
+    summary_time TIME NOT NULL DEFAULT '20:00',
+    last_summary_date DATE,
+
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -59,8 +63,10 @@ CREATE TABLE notification_logs (
     id BIGSERIAL PRIMARY KEY,
     job_id BIGINT NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,
     filter_id INT NOT NULL REFERENCES saved_filters(id) ON DELETE CASCADE,
-    sent_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-    status VARCHAR(30) DEFAULT 'SENT', -- 'SENT', 'FAILED'
+    sent_at TIMESTAMPTZ,
+    status VARCHAR(30) DEFAULT 'SENT', -- 'QUEUED', 'SENDING', 'SENT', 'FAILED', 'DIGEST_FAILED', 'SKIPPED'
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ,
     error_message TEXT,
     
     -- Ugyanarra a munkára ugyanazzal a szűrővel csak egyszer mehet ki értesítés!
@@ -78,3 +84,7 @@ CREATE INDEX idx_jobs_city ON job_postings(city);
 CREATE INDEX idx_jobs_wage ON job_postings(hourly_wage_min);
 CREATE INDEX idx_jobs_first_seen ON job_postings(first_seen_at DESC);
 CREATE INDEX idx_jobs_active ON job_postings(is_active) WHERE is_active = TRUE;
+CREATE INDEX idx_saved_filters_digest_due ON saved_filters(summary_time)
+    WHERE is_active = TRUE AND delivery_mode = 'daily';
+CREATE INDEX idx_notification_digest_retry ON notification_logs(filter_id, next_attempt_at)
+    WHERE status IN ('QUEUED', 'SENDING');
