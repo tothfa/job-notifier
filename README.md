@@ -114,10 +114,23 @@ A `-` válasszal kihagyott feltétel alapértelmezése: minden város, távmunka
 | `/start`, `/help` | Súgó megjelenítése |
 | `/filter` | Szűrő létrehozása vagy módosítása |
 | `/myfilter` | Aktív szűrő megtekintése |
+| `/notify` | Értesítési mód megtekintése |
+| `/notify instant` | Azonnali értesítés beállítása |
+| `/notify daily HH:MM` | Napi összefoglaló beállítása magyar idő szerint |
+| `/notify retry` | Véglegesen sikertelen napi értesítések újrapróbálása |
 | `/stopfilter` | Értesítések kikapcsolása |
 | `/cancel` | Folyamatban lévő szűrőbeállítás megszakítása |
 
 Az alkalmazás az újonnan felismert hirdetéseket küldi ki; a szűrő létrehozásakor az adatbázisban már korábban tárolt állásokhoz nem küld automatikusan visszamenőleges értesítést. Az átmenetileg sikertelen értesítésekkel a rendszer a következő adatgyűjtési ciklusokban újrapróbálkozik.
+
+Az értesítések alapértelmezés szerint azonnal érkeznek. A `/notify` paranccsal megtekintheted a módot, és választhatsz:
+
+- `/notify instant` – minden új találatról külön, azonnali üzenet;
+- `/notify daily 20:00` – napi összefoglaló a megadott `HH:MM` időpontban, magyar idő szerint.
+
+A napi összefoglaló több állást egy üzenetbe rendez, és csak sikeres kézbesítés után jelöli őket elküldöttnek. Ha a küldés sikertelen, a függőben maradt állások a következő ütemezett ellenőrzéskor újrapróbálkoznak. A küldési mód és az időpont az adatbázisban, konténer-újraindítás után is megmarad. A meglévő adatbázis-kötetek sémáját az alkalmazás induláskor automatikusan kiegészíti.
+
+A napi összefoglaló a küldés előtt újra ellenőrzi a hirdetéseket az aktuális szűrővel; a már nem illeszkedő vagy kikapcsolt szűrőhöz tartozó várakozó elemeket kihagyja. Sikertelen digest-küldésnél az exponenciális várakozás 1 percről indul, legfeljebb 6 óráig nő, és összesen maximum 8 próbálkozás történik. A véglegesen sikertelen elemeket a `/notify retry` paranccsal lehet újra sorba állítani. Telegram API használatakor a szolgáltató általi elfogadás és az adatbázis-visszaigazolás közötti hálózati hiba esetén ritkán előfordulhat ismételt kézbesítés; a rendszer ezt nem tudja exactly-once garanciával kizárni.
 
 ## Üzemeltetés
 

@@ -1,11 +1,15 @@
 import logging
+import re
 import threading
+from datetime import time
 from typing import Any
 
 from database import (
     disable_chat_filter,
     get_chat_filter,
     get_update_offset,
+    retry_failed_digest_notifications,
+    set_chat_notification_preference,
     save_chat_filter,
     save_update_offset,
 )
@@ -80,7 +84,7 @@ class TelegramBot:
             return
 
         if text.startswith("/"):
-            command, _, _arguments = text.partition(" ")
+            command, _, arguments = text.partition(" ")
             command = command.split("@", 1)[0].lower()
             if command in {"/start", "/help"}:
                 self._send_help(chat_id)
@@ -92,6 +96,8 @@ class TelegramBot:
                 )
             elif command == "/myfilter":
                 self._show_filter(chat_id)
+            elif command == "/notify":
+                self._set_notification_preference(chat_id, arguments.strip())
             elif command == "/stopfilter":
                 self._wizard_state.pop(chat_id, None)
                 if disable_chat_filter(chat_id):
@@ -200,8 +206,77 @@ class TelegramBot:
             f"• Távmunka: {'igen' if filter_data['include_remote'] else 'nem'}\n"
             f"• Minimum bér: {filter_data['min_hourly_wage'] or 'nincs'} Ft/óra\n"
             f"• Kulcsszavak: {', '.join(keywords) if keywords else 'nincs korlátozás'}\n\n"
+            f"• Értesítés: {self._notification_summary(filter_data)}\n\n"
             "Módosításhoz: /filter | Kikapcsoláshoz: /stopfilter",
         )
+
+    def _set_notification_preference(self, chat_id: str, arguments: str) -> None:
+        preference = get_chat_filter(chat_id)
+        if preference is None:
+            self._reply(chat_id, "Előbb hozz létre egy aktív szűrőt a /filter paranccsal.")
+            return
+
+        parts = arguments.split()
+        if parts == ["retry"]:
+            if preference.get("delivery_mode", "instant") != "daily":
+                self._reply(chat_id, "Újrapróbálás csak napi összefoglaló módban érhető el.")
+                return
+            retried = retry_failed_digest_notifications(chat_id)
+            if retried:
+                self._reply(
+                    chat_id,
+                    f"{retried} korábban véglegesen sikertelen hirdetést újra sorba állítottam. "
+                    "A következő ütemezett próbálkozáskor küldöm őket.",
+                )
+            else:
+                self._reply(chat_id, "Nincs újrapróbálható, véglegesen sikertelen napi összefoglaló.")
+            return
+        if not parts:
+            self._reply(
+                chat_id,
+                f"Jelenlegi értesítési mód: {self._notification_summary(preference)}\n\n"
+                "Beállítás:\n"
+                "• Azonnali: /notify instant\n"
+                "• Napi összefoglaló: /notify daily HH:MM (magyar idő szerint)\n"
+                "• Véglegesen sikertelen napi digest újrapróbálása: /notify retry",
+            )
+            return
+
+        if parts == ["instant"]:
+            mode = "instant"
+            summary_time = preference["summary_time"] or time(20, 0)
+        elif (
+            len(parts) == 2
+            and parts[0] == "daily"
+            and re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", parts[1])
+        ):
+            mode = "daily"
+            hour, minute = map(int, parts[1].split(":"))
+            summary_time = time(hour, minute)
+        else:
+            self._reply(
+                chat_id,
+                "Hibás beállítás. Használd: /notify instant vagy /notify daily HH:MM "
+                "(például: /notify daily 20:00), vagy /notify retry.",
+            )
+            return
+
+        set_chat_notification_preference(chat_id, mode, summary_time)
+        if mode == "instant":
+            self._reply(chat_id, "Az azonnali értesítést beállítottam.")
+        else:
+            self._reply(
+                chat_id,
+                f"A napi összefoglalót {summary_time.strftime('%H:%M')}-ra állítottam "
+                "magyar idő szerint.",
+            )
+
+    @staticmethod
+    def _notification_summary(preference: dict[str, Any]) -> str:
+        if preference.get("delivery_mode", "instant") == "daily":
+            summary_time = preference.get("summary_time") or time(20, 0)
+            return f"napi összefoglaló {summary_time.strftime('%H:%M')}-kor"
+        return "azonnali"
 
     def _send_help(self, chat_id: str) -> None:
         self._reply(
@@ -209,6 +284,10 @@ class TelegramBot:
             "Diákmunka-értesítő súgó\n\n"
             "/filter – szűrő beállítása vagy módosítása\n"
             "/myfilter – aktív szűrő megtekintése\n"
+            "/notify – értesítési mód megtekintése\n"
+            "/notify instant – azonnali értesítések\n"
+            "/notify daily HH:MM – napi összefoglaló beállítása (magyar idő)\n"
+            "/notify retry – véglegesen sikertelen napi digest újrapróbálása\n"
             "/stopfilter – értesítések kikapcsolása\n"
             "/cancel – folyamatban lévő beállítás megszakítása\n"
             "/help – súgó\n\n"
