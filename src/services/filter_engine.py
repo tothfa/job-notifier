@@ -1,21 +1,40 @@
-from typing import List, Dict, Any
+import logging
+from datetime import datetime, timezone
+from typing import Any
+from zoneinfo import ZoneInfo
+
 from sqlalchemy import create_engine, text
+
 from config import settings
+from database import (
+    claim_digest_notifications,
+    digest_filter_lock,
+    get_active_filter,
+    get_due_daily_filters,
+    has_pending_digest_notifications,
+    mark_daily_summary_sent,
+    mark_notifications_skipped,
+    mark_notifications_sent,
+    record_digest_chunk_failure,
+)
 from schemas import JobPostingCreate
 from services.notifier import TelegramNotifier
 
 engine = create_engine(settings.database_url, pool_pre_ping=True)
+TIMEZONE = ZoneInfo("Europe/Budapest")
+logger = logging.getLogger("JobNotifier.FilterEngine")
 
 
 class FilterEngine:
     def __init__(self):
         self.notifier = TelegramNotifier()
 
-    def _get_active_filters(self) -> List[Dict[str, Any]]:
+    def _get_active_filters(self) -> list[dict[str, Any]]:
         """Lekérdezi az összes aktív felhasználói szűrőt az adatbázisból."""
         query = text("""
-            SELECT id, name, telegram_chat_id, cities, categories, 
-                   include_remote, min_hourly_wage, keywords_include, keywords_exclude
+            SELECT id, name, telegram_chat_id, cities, categories,
+                   include_remote, min_hourly_wage, keywords_include, keywords_exclude,
+                   delivery_mode, summary_time
             FROM saved_filters
             WHERE is_active = TRUE;
         """)
@@ -26,7 +45,7 @@ class FilterEngine:
                 filters.append(dict(row))
             return filters
 
-    def _job_matches_filter(self, job: JobPostingCreate, f: Dict[str, Any]) -> bool:
+    def _job_matches_filter(self, job: JobPostingCreate, f: dict[str, Any]) -> bool:
         """Eldönti, hogy egy adott hirdetés illeszkedik-e a szűrő feltételeire."""
         
         # 1. Minimum órabér szűrés
@@ -69,11 +88,11 @@ class FilterEngine:
 
         return True
 
-    def _has_already_notified(self, job_id: int, filter_id: int) -> bool:
-        """Ellenőrzi, hogy erre a munkára sikeresen küldtünk-e már értesítést."""
+    def _has_notification_record(self, job_id: int, filter_id: int) -> bool:
+        """Avoid duplicate work for notifications already sent, queued, or retrying."""
         query = text("""
             SELECT 1 FROM notification_logs 
-            WHERE job_id = :job_id AND filter_id = :filter_id AND status = 'SENT';
+            WHERE job_id = :job_id AND filter_id = :filter_id;
         """)
         with engine.connect() as conn:
             row = conn.execute(query, {"job_id": job_id, "filter_id": filter_id}).first()
@@ -82,8 +101,12 @@ class FilterEngine:
     def _log_notification(self, job_id: int, filter_id: int, status: str = "SENT", error: str | None = None):
         """Rögzíti az értesítés állapotát, beleértve a később újrapróbálható hibákat."""
         query = text("""
-            INSERT INTO notification_logs (job_id, filter_id, status, error_message)
-            VALUES (:job_id, :filter_id, :status, :error)
+            INSERT INTO notification_logs (job_id, filter_id, status, sent_at, error_message)
+            VALUES (
+                :job_id, :filter_id, :status,
+                CASE WHEN :is_sent THEN CURRENT_TIMESTAMP ELSE NULL END,
+                :error
+            )
             ON CONFLICT (job_id, filter_id) DO UPDATE SET
                 status = EXCLUDED.status,
                 error_message = EXCLUDED.error_message,
@@ -93,9 +116,15 @@ class FilterEngine:
                 END;
         """)
         with engine.begin() as conn:
-            conn.execute(query, {"job_id": job_id, "filter_id": filter_id, "status": status, "error": error})
+            conn.execute(query, {
+                "job_id": job_id,
+                "filter_id": filter_id,
+                "status": status,
+                "is_sent": status == "SENT",
+                "error": error,
+            })
 
-    def _retry_failed_notifications(self, filters: List[Dict[str, Any]]) -> None:
+    def _retry_failed_notifications(self, filters: list[dict[str, Any]]) -> None:
         """Újraküldi a korábbi ciklusokban sikertelen, továbbra is illeszkedő értesítéseket."""
         filters_by_id = {f["id"]: f for f in filters}
         query = text("""
@@ -114,6 +143,8 @@ class FilterEngine:
         for row in failed_notifications:
             filter_data = filters_by_id.get(row["filter_id"])
             if filter_data is None:
+                continue
+            if filter_data.get("delivery_mode", "instant") != "instant":
                 continue
             job = JobPostingCreate(
                 source_code=row["source_code"],
@@ -140,7 +171,7 @@ class FilterEngine:
                 error=None if success else "Telegram API hiba",
             )
 
-    def process_new_jobs(self, new_jobs_with_ids: List[tuple[int, JobPostingCreate]]):
+    def process_new_jobs(self, new_jobs_with_ids: list[tuple[int, JobPostingCreate]]) -> None:
         """
         Összeveti az újonnan mentett hirdetéseket (adatbázis ID-val) a mentett szűrőkkel,
         és elküldi a Telegram értesítéseket.
@@ -158,20 +189,75 @@ class FilterEngine:
 
         for job_id, job in new_jobs_with_ids:
             for f in filters:
-                # Ha már kapott erről értesítést ez a szűrő, átugorjuk
-                if self._has_already_notified(job_id, f["id"]):
+                if self._has_notification_record(job_id, f["id"]):
                     continue
 
-                # Ha illeszkedik a szűrőre:
                 if self._job_matches_filter(job, f):
+                    if f.get("delivery_mode", "instant") == "daily":
+                        self._log_notification(job_id, f["id"], status="QUEUED")
+                        continue
+
                     chat_id = f["telegram_chat_id"]
                     print(f"  -> Találat! '{job.title}' illeszkedik a(z) '{f['name']}' szűrőre.")
-                    
-                    # Küldés Telegramra
                     success = self.notifier.send_job_alert(job, chat_id=chat_id)
-                    
                     status = "SENT" if success else "FAILED"
                     error_msg = None if success else "Telegram API hiba"
-                    
-                    # Naplózás
                     self._log_notification(job_id, f["id"], status=status, error=error_msg)
+
+    def process_due_digests(self, now: datetime | None = None) -> None:
+        current = now or datetime.now(TIMEZONE)
+        current = (
+            current.replace(tzinfo=TIMEZONE)
+            if current.tzinfo is None
+            else current.astimezone(TIMEZONE)
+        )
+        current_time = current.timetz().replace(tzinfo=None, second=0, microsecond=0)
+        today = current.date()
+        due_filters = get_due_daily_filters(current_time, today)
+
+        for filter_data in due_filters:
+            filter_id = filter_data["id"]
+            with digest_filter_lock(filter_id) as acquired:
+                if not acquired:
+                    continue
+
+                active_filter = get_active_filter(filter_id)
+                if (
+                    active_filter is None
+                    or active_filter["delivery_mode"] != "daily"
+                ):
+                    continue
+
+                items = claim_digest_notifications(
+                    filter_id,
+                    now=current.astimezone(timezone.utc),
+                )
+                matching_items = []
+                skipped_ids = []
+                for job_id, job in items:
+                    if self._job_matches_filter(job, active_filter):
+                        matching_items.append((job_id, job))
+                    else:
+                        skipped_ids.append(job_id)
+                mark_notifications_skipped(filter_id, skipped_ids)
+
+                def record_chunk_result(job_ids: list[int], success: bool) -> None:
+                    if success:
+                        mark_notifications_sent(filter_id, job_ids)
+                        return
+                    terminal_count = record_digest_chunk_failure(filter_id, job_ids)
+                    logger.warning(
+                        "Digest chunk küldése sikertelen (filter_id=%s, terminal=%s).",
+                        filter_id,
+                        terminal_count,
+                    )
+
+                if matching_items:
+                    self.notifier.send_job_digest(
+                        active_filter["telegram_chat_id"],
+                        matching_items,
+                        on_chunk_result=record_chunk_result,
+                    )
+
+                if not has_pending_digest_notifications(filter_id):
+                    mark_daily_summary_sent(filter_id, today)

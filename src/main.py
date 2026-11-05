@@ -86,6 +86,14 @@ def scrape_cycle():
     )
 
 
+def digest_cycle():
+    """Deliver queued daily summaries when their configured time has arrived."""
+    try:
+        FilterEngine().process_due_digests()
+    except Exception:
+        logger.exception("A napi Telegram-összefoglalók feldolgozása sikertelen.")
+
+
 def main():
     logger.info("Diákmunka Értesítő szolgáltatás indítása...")
 
@@ -103,6 +111,17 @@ def main():
         next_run_time=datetime.now(TIMEZONE),
         id="student_jobs_crawler",
         name="Diákmunka crawler és szűrő",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        digest_cycle,
+        trigger="interval",
+        minutes=1,
+        next_run_time=datetime.now(TIMEZONE),
+        id="daily_notification_digests",
+        name="Napi Telegram-összefoglalók",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

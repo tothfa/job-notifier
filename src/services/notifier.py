@@ -1,5 +1,6 @@
 import html
 import logging
+from collections.abc import Callable
 
 import httpx
 from config import settings
@@ -65,6 +66,79 @@ class TelegramNotifier:
         }
         return self._post("sendMessage", payload)
 
+    def send_job_digest(
+        self,
+        chat_id: str,
+        items: list[tuple[int, JobPostingCreate]],
+        on_chunk_result: Callable[[list[int], bool], None] | None = None,
+    ) -> list[tuple[list[int], bool]]:
+        header = "📬 <b>Napi diákmunkák</b>\n\n"
+        chunks: list[tuple[list[int], str]] = []
+        current_ids: list[int] = []
+        current_message = header
+
+        for job_id, job in items:
+            block = self._format_digest_job(job)
+            if current_ids and self._telegram_length(current_message + block) > 3500:
+                chunks.append((current_ids, current_message.rstrip()))
+                current_ids = []
+                current_message = header
+            current_ids.append(job_id)
+            current_message += block
+
+        if current_ids:
+            chunks.append((current_ids, current_message.rstrip()))
+
+        results = []
+        for job_ids, message in chunks:
+            success = self._post(
+                "sendMessage",
+                {
+                    "chat_id": chat_id,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+            )
+            results.append((job_ids, success))
+            if on_chunk_result is not None:
+                on_chunk_result(job_ids, success)
+        return results
+
+    def _format_digest_job(self, job: JobPostingCreate) -> str:
+        title = html.escape(job.title[:150], quote=True)
+        url = html.escape(job.url, quote=True)
+        title_markup = (
+            f"<a href=\"{url}\"><b>{title}</b></a>"
+            if len(url) <= 500
+            else f"<b>{title}</b>"
+        )
+        source = html.escape(job.source_code[:50].upper())
+        city = html.escape((job.city or "Nincs megadva")[:60])
+        category = html.escape((job.category or "Általános")[:50])
+        wage = (
+            html.escape(job.wage_raw_text[:80])
+            if job.wage_raw_text
+            else f"Br. {job.hourly_wage_min} Ft/óra"
+            if job.hourly_wage_min
+            else "Nincs megadva"
+        )
+        if job.is_remote:
+            city += " (🏠 távmunka)"
+        description = ""
+        if job.description:
+            description = f"\n  <i>{html.escape(job.description[:100])}</i>"
+
+        return (
+            f"• {title_markup} [{source}]\n"
+            f"  📍 {city} · 💰 {wage} · 🏷 {category}"
+            f"{description}\n\n"
+        )
+
+    @staticmethod
+    def _telegram_length(message: str) -> int:
+        return len(message.encode("utf-16-le")) // 2
+
     def get_updates(self, offset: int | None, timeout: int) -> list[dict]:
         payload: dict[str, object] = {
             "timeout": timeout,
@@ -88,6 +162,7 @@ class TelegramNotifier:
             {"command": "filter", "description": "Értesítési szűrő beállítása"},
             {"command": "myfilter", "description": "Aktív szűrő megtekintése"},
             {"command": "stopfilter", "description": "Értesítések kikapcsolása"},
+            {"command": "notify", "description": "Értesítési mód beállítása"},
             {"command": "cancel", "description": "Beállítás megszakítása"},
             {"command": "help", "description": "Súgó"},
         ]
