@@ -80,6 +80,7 @@ class MindDiakScraper(BaseScraper):
             full_url = urljoin(self.base_url, href)
             card = link.find_parent(["article", "div", "li"]) or link
             card_text = card.get_text(" | ", strip=True)
+            normalized_card_text = card_text.replace("|", " ")
 
             # Cím kinyerése címsorból, vagy a link szövegéből, végső esetben a slugból
             title_el = card.find(["h2", "h3", "h4", "strong"])
@@ -91,7 +92,7 @@ class MindDiakScraper(BaseScraper):
             # Órabér keresése a kártyán
             wage_match = re.search(
                 r"((?:br\.?|bruttó)?\s*\d[\d\s\.,-]*\s*ft(?:\s*/\s*(?:óra|ó))?)",
-                card_text,
+                normalized_card_text,
                 re.IGNORECASE
             )
             raw_wage = wage_match.group(1).strip() if wage_match else None

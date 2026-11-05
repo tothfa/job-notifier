@@ -5,7 +5,8 @@ from typing import Optional, Tuple
 class JobNormalizer:
     # Gyakori szavak, amik távmunkára utalnak a címben, városban vagy leírásban
     REMOTE_KEYWORDS = [
-        "home office", "home-office", "távmunka", "remote", "otthonról", "online végezhető"
+        "home office", "home-office", "távmunka", "remote", "otthonról",
+        "otthoni munka", "online végezhető",
     ]
 
     @staticmethod
