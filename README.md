@@ -1,175 +1,113 @@
 # Diákmunka-értesítő
 
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Licenc: MIT](https://img.shields.io/badge/Licenc-MIT-blue.svg)](LICENSE)
+
 **Verzió:** `0.1.0` · **Állapot:** fejlesztés alatt
 
-Docker Compose-ban futó, nyílt forrású alkalmazás, amely magyar diákszövetkezetek álláshirdetéseit figyeli, és az új, személyes feltételeknek megfelelő munkákról Telegramon értesít. A szűrők Telegram-parancsokkal állíthatók be; a használatukhoz nem kell adatbázist vagy konfigurációs fájlt szerkeszteni.
-
-> A projekt korai, 1.0 előtti verzió. A forrásoldalak felépítése változhat, ezért a scraperek időnként karbantartást igényelhetnek.
+Docker Compose alapú háttérszolgáltatás, amely magyar diákszövetkezetek álláshirdetéseit gyűjti, normalizálja és PostgreSQL adatbázisban tárolja, majd a beállított szűrési feltételek alapján Telegram-értesítéseket küld.
 
 ## Funkciók
 
-- Négy diákmunkás forrás rendszeres lekérdezése.
-- Az állások egységesítése és PostgreSQL-ben való tárolása.
-- Duplikált hirdetések kiszűrése.
-- Telegram-szűrő város, távmunka, minimum bruttó órabér és kulcsszavak szerint.
-- Az új, szűrőnek megfelelő állásokról Telegram-értesítés.
-- Indulás utáni azonnali scrape, majd ismétlés 10 percenként.
-- Docker Compose-alapú futtatás és tartós adatbázis-kötet.
+- 5 diákszövetkezet periodikus monitorozása (10 perces ciklusidő).
+- SHA-256 fingerprint alapú deduplikáció.
+- Normalizált adattárolás (bruttó órabér, egységes városnevek, távmunka státusz).
+- Személyre szabható Telegram-szűrő (város, távmunka, minimum órabér, kulcsszavak).
+- Rugalmas kézbesítés: azonnali értesítés vagy időzített napi összefoglaló.
+- Hibatűrő működés: egyetlen forrás vagy hálózati kérés hibája nem akasztja meg a többi scraper futását.
 
-## Források
+## Támogatott források
 
-- [Schönherz](https://www.schonherz.hu/)
-- [Meló-Diák](https://www.melodiak.hu/)
-- [Mind-Diák](https://minddiak.hu/)
-- [MADS](https://mads.hu/)
+| Forrás | Weboldal | Adatgyűjtés módja | Lefedettség |
+| :--- | :--- | :--- | :--- |
+| Schönherz | [schonherz.hu](https://www.schonherz.hu/) | HTML scraping | Budapest, Debrecen |
+| Meló-Diák | [melodiak.hu](https://www.melodiak.hu/) | REST API | Országos |
+| Mind-Diák | [minddiak.hu](https://minddiak.hu/) | HTML scraping | Országos |
+| MADS | [mads.hu](https://mads.hu/) | HTML + JSON-LD | Országos |
+| MŰISZ | [muisz.hu](https://muisz.hu/) | Angular Universal (SSR) | Országos |
 
-A forrásoldalak tartalma és technikai felépítése külső szolgáltatók ellenőrzése alatt áll; változásuk átmenetileg megakadályozhatja az adatgyűjtést. Futtatás előtt ellenőrizd a források felhasználási feltételeit és az automatizált lekérésekre vonatkozó szabályait.
-
-## Működés és technológiák
-
-Az alkalmazás két feladatot futtat egy konténerben: az APScheduler ütemezi az adatgyűjtést, a Telegram bot pedig külön szálon long pollinggal fogadja a felhasználói parancsokat.
+## Működés
 
 ```text
-Forrásoldalak → HTTPX scraperek → normalizálás → PostgreSQL
+Források → HTTPX scraperek → Normalizálás → PostgreSQL (Deduplikáció)
                                                    ↓
-Telegram szűrő ← parancsbot             illeszkedő új állás
-                                                   ↓
-                                         Telegram értesítés
+Telegram felhasználó ← Bot értesítő ← FilterEngine (Szűrés)
 ```
 
-| Terület | Technológia |
-| --- | --- |
-| Futási környezet | Python 3.12 |
-| Adatbázis | PostgreSQL 16, SQLAlchemy 2, psycopg 3 |
-| Adatellenőrzés és konfiguráció | Pydantic 2, pydantic-settings |
-| HTTP és HTML-feldolgozás | HTTPX, Beautiful Soup 4, lxml |
-| Ütemezés | APScheduler 3 |
-| Telepítés | Docker, Docker Compose |
-| Értesítések és parancsok | Telegram Bot API |
-
-A függőségek alsó verziókorlátait a [`requirements.txt`](requirements.txt) tartalmazza.
-
-## Követelmények
-
-- Docker Engine és a Docker Compose plugin.
-- Internetkapcsolat az állásoldalak és a Telegram Bot API eléréséhez.
-- Telegram bot token, amelyet a Telegram [@BotFather](https://t.me/BotFather) segítségével hozhatsz létre.
+1. **Adatgyűjtés:** 10 percenként lekérdezi az 5 forrásoldalt.
+2. **Normalizálás és tárolás:** Kiszűri a duplikátumokat és menti az új rekordokat.
+3. **Szűrés és értesítés:** Összeveti az új állásokat az aktív Telegram-szűrőkkel (azonnal vagy napi összefoglalóként).
 
 ## Telepítés és indítás
 
-1. Klónozd a repositoryt, majd lépj a projekt könyvtárába.
-2. Készíts helyi konfigurációt a mintából:
+### Követelmények
+- Docker Engine és Docker Compose plugin
+- Telegram Bot token ([@BotFather](https://t.me/BotFather))
 
+### Lépések
+
+1. Repository klónozása:
+   ```sh
+   git clone https://github.com/tothfa/job-notifier.git
+   cd job-notifier
+   ```
+
+2. Környezeti változók beállítása:
    ```sh
    cp .env.example .env
    ```
+   Állítsd be a `.env` fájlban az adatbázis adatokat (`DB_USER`, `DB_PASSWORD`, `DB_NAME`) és a `TELEGRAM_BOT_TOKEN`-t.
 
-3. Nyisd meg a `.env` fájlt, és állítsd be:
-   - a PostgreSQL felhasználónevet (`DB_USER`), adatbázisnevet (`DB_NAME`) és egyedi jelszót (`DB_PASSWORD`);
-   - a BotFather által adott tokent (`TELEGRAM_BOT_TOKEN`).
-
-   Erős adatbázis-jelszó generálásához például:
-
-   ```sh
-   openssl rand -hex 32
-   ```
-
-   A bot tokenjét és az adatbázis-jelszót kezeld titokként: ne másold nyilvános issue-ba, naplóba vagy verziókezelt fájlba.
-
-4. Indítsd el az alkalmazást és az adatbázist:
-
+3. Szolgáltatás indítása:
    ```sh
    docker compose up -d --build
    ```
 
-Az alkalmazás az indulás után azonnal elindítja az első adatgyűjtést, majd 10 percenként ismétli azt. A PostgreSQL portja nincs kitéve a host hálózatra; az alkalmazás a Compose hálózatán csatlakozik hozzá.
+## Környezeti változók
 
-### Környezeti változók
+| Változó | Kötelező | Alapértelmezett | Leírás |
+| :--- | :---: | :---: | :--- |
+| `DB_USER` | Igen | - | PostgreSQL felhasználónév |
+| `DB_PASSWORD` | Igen | - | PostgreSQL jelszó |
+| `DB_NAME` | Igen | - | Adatbázis neve |
+| `DB_HOST` | Igen | `postgres` | Adatbázis hostnév Docker hálózaton |
+| `DB_PORT` | Nem | `5432` | Adatbázis port |
+| `TELEGRAM_BOT_TOKEN` | Igen | - | Telegram Bot API token |
+| `LOG_LEVEL` | Nem | `INFO` | Naplózási szint |
 
-| Változó | Szükséges | Leírás |
-| --- | --- | --- |
-| `DB_USER` | Igen | PostgreSQL felhasználónév |
-| `DB_PASSWORD` | Igen | PostgreSQL jelszó; egyedi, erős értéket használj |
-| `DB_NAME` | Igen | PostgreSQL adatbázis neve |
-| `DB_HOST` | Igen | Compose alatt az adatbázis szolgáltatásneve (`postgres`) |
-| `DB_PORT` | Nem | Adatbázis-port; alapértelmezés: `5432` |
-| `TELEGRAM_BOT_TOKEN` | Igen | A Telegram BotFather tokenje |
-| `LOG_LEVEL` | Nem | Naplózási szint; alapértelmezés: `INFO` |
+## Telegram-parancsok
 
-A Compose konfiguráció a `DB_HOST` és `DB_PORT` értékét a belső adatbázis-szolgáltatásra állítja. A `DB_PASSWORD`, `DB_USER` és `DB_NAME` értékeinek egy már inicializált adatbázis-kötetnél egyezniük kell az adatbázisban beállított adatokkal. A `.env` módosítása önmagában nem változtatja meg egy meglévő PostgreSQL-felhasználó jelszavát. Az inicializáló SQL csak új adatbázis-kötet első létrehozásakor fut le.
-
-## Telegram-szűrő beállítása
-
-1. Nyisd meg a bot privát beszélgetését, és küldd el a `/start` parancsot.
-2. Küldd el a `/filter` parancsot, majd válaszolj a kérdésekre:
-   - város(ok), vesszővel elválasztva, például `Debrecen, Budapest`;
-   - jöhet-e távmunka (`igen` vagy `nem`);
-   - minimum bruttó órabér forintban, például `2200`;
-   - keresett kulcsszavak, vesszővel elválasztva, például `python, tesztelő`.
-
-A `-` válasszal kihagyott feltétel alapértelmezése: minden város, távmunka engedélyezése, minimum bér nélkül, illetve kulcsszó-korlátozás nélkül. Több megadott kulcsszó esetén legalább az egyiknek szerepelnie kell a hirdetés címében vagy leírásában. Egy Telegram-chathez egy aktív szűrő tartozik; a `/filter` paranccsal módosíthatod.
-
-| Parancs | Művelet |
-| --- | --- |
+| Parancs | Leírás |
+| :--- | :--- |
 | `/start`, `/help` | Súgó megjelenítése |
-| `/filter` | Szűrő létrehozása vagy módosítása |
+| `/filter` | Szűrő beállítása vagy módosítása |
 | `/myfilter` | Aktív szűrő megtekintése |
-| `/notify` | Értesítési mód megtekintése |
-| `/notify instant` | Azonnali értesítés beállítása |
-| `/notify daily HH:MM` | Napi összefoglaló beállítása magyar idő szerint |
-| `/notify retry` | Véglegesen sikertelen napi értesítések újrapróbálása |
-| `/stopfilter` | Értesítések kikapcsolása |
-| `/cancel` | Folyamatban lévő szűrőbeállítás megszakítása |
-
-Az alkalmazás az újonnan felismert hirdetéseket küldi ki; a szűrő létrehozásakor az adatbázisban már korábban tárolt állásokhoz nem küld automatikusan visszamenőleges értesítést. Az átmenetileg sikertelen értesítésekkel a rendszer a következő adatgyűjtési ciklusokban újrapróbálkozik.
-
-Az értesítések alapértelmezés szerint azonnal érkeznek. A `/notify` paranccsal megtekintheted a módot, és választhatsz:
-
-- `/notify instant` – minden új találatról külön, azonnali üzenet;
-- `/notify daily 20:00` – napi összefoglaló a megadott `HH:MM` időpontban, magyar idő szerint.
-
-A napi összefoglaló több állást egy üzenetbe rendez, és csak sikeres kézbesítés után jelöli őket elküldöttnek. Ha a küldés sikertelen, a függőben maradt állások a következő ütemezett ellenőrzéskor újrapróbálkoznak. A küldési mód és az időpont az adatbázisban, konténer-újraindítás után is megmarad. A meglévő adatbázis-kötetek sémáját az alkalmazás induláskor automatikusan kiegészíti.
-
-A napi összefoglaló a küldés előtt újra ellenőrzi a hirdetéseket az aktuális szűrővel; a már nem illeszkedő vagy kikapcsolt szűrőhöz tartozó várakozó elemeket kihagyja. Sikertelen digest-küldésnél az exponenciális várakozás 1 percről indul, legfeljebb 6 óráig nő, és összesen maximum 8 próbálkozás történik. A véglegesen sikertelen elemeket a `/notify retry` paranccsal lehet újra sorba állítani. Telegram API használatakor a szolgáltató általi elfogadás és az adatbázis-visszaigazolás közötti hálózati hiba esetén ritkán előfordulhat ismételt kézbesítés; a rendszer ezt nem tudja exactly-once garanciával kizárni.
+| `/notify` | Értesítési mód lekérdezése |
+| `/notify instant` | Azonnali értesítés minden új találatról |
+| `/notify daily HH:MM` | Napi összefoglaló adott időpontban (pl. `/notify daily 20:00`) |
+| `/notify retry` | Sikertelen összefoglalók újrapróbálása |
+| `/stopfilter` | Értesítések szüneteltetése |
+| `/cancel` | Folyamatban lévő beállítás megszakítása |
 
 ## Üzemeltetés
 
-Állapot ellenőrzése:
-
+Konténerek állapota:
 ```sh
 docker compose ps
 ```
 
-Alkalmazásnaplók követése:
-
+Naplók követése:
 ```sh
 docker compose logs -f bot-service
 ```
 
-Konténerek leállítása az adatbázis megőrzésével:
-
+Leállítás az adatok megőrzésével:
 ```sh
 docker compose down
 ```
 
-Az álláshirdetések, szűrők és értesítési naplók a PostgreSQL `pgdata` kötetében maradnak. A projekt nem végez automatikus adatbázis-takarítást. A `docker compose down -v` parancs az adatbázis-kötetet és az abban tárolt adatokat is törli; csak akkor használd, ha valóban el akarod veszíteni ezeket az adatokat.
-
-## Biztonság és ismert korlátok
-
-- A `.env` helyi konfiguráció; ne töltsd fel. A `.env.example` nem tartalmaz valódi jelszót vagy bot tokent.
-- A bot jelenleg nem használ külön felhasználói engedélylistát. A botot elérő Telegram-chatek szűrőt állíthatnak be; ezt vedd figyelembe, ha saját példányt üzemeltetsz.
-- Egy bot tokent egyszerre csak egy long pollingot használó példányhoz rendelj; párhuzamos polling vagy webhook ütközést okozhat.
-- A scrape-elés külső oldalak struktúrájától függ. Egy forrás hibája naplózásra kerül, de a többi forrás lekérése ettől még folytatódik.
-- A projekt 1.0 előtti fejlesztési állapotú; nincs garantált rendelkezésre állás vagy visszafelé kompatibilis adatbázis-migráció.
-
-## GitHub Actions
-
-A CI minden push és pull request esetén ellenőrzi a Python-szintaxist és a verziójelölést, Gitleaks segítségével titokmintákat keres, validálja a Compose-konfigurációt, és felépíti a Docker image-et. A titokellenőrző nyílt forrású, rögzített verziójú konténerben fut; a workflow nem használ éles adatbázis- vagy Telegram-hitelesítő adatokat.
-
-## Közreműködés
-
-Hibajelzés vagy fejlesztési javaslat esetén nyiss GitHub issue-t. Biztonsági sérülékenységet ne jelents nyilvános issue-ban; használd a repository privát sérülékenység-jelentési funkcióját, ha az engedélyezett. Pull request előtt ellenőrizd, hogy a módosítás nem tartalmaz tokent, jelszót, helyi konfigurációt vagy adatbázis-dumpot.
-
 ## Licenc
 
-A projekt az [MIT licenc](LICENSE) feltételei szerint használható.
+[MIT](LICENSE)

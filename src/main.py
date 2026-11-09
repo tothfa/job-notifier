@@ -17,6 +17,7 @@ from scrapers.schonherz import SchonherzScraper
 from scrapers.melodiak import MeloDiakScraper
 from scrapers.minddiak import MindDiakScraper
 from scrapers.mads import MadsScraper
+from scrapers.muisz import MuiszScraper
 from services.filter_engine import FilterEngine
 from services.telegram_bot import TelegramBot
 
@@ -42,6 +43,7 @@ def scrape_cycle():
         MeloDiakScraper(),
         MindDiakScraper(),
         MadsScraper(),
+        MuiszScraper(),
     ]
 
     total_scraped = 0
